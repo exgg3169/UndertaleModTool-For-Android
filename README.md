@@ -20,10 +20,13 @@ On top of that it adds a new native Android UI (`UndertaleModTool.Android`, .NET
 | Disassemble code, edit and reassemble it | ✅ |
 | Search in all decompiled code (plain text or regex) | ✅ |
 | Texture / sprite / background / font previews, export to PNG | ✅ (PNG, QOI and BZ2+QOI pages) |
+| Replace images: sprite frames, backgrounds, fonts, texture page items, whole texture pages | ✅ |
+| Room editor: view rooms (GMS1 backgrounds/tiles, GMS2 layers), select, move, add, duplicate and delete instances | ✅ |
+| Play, export and replace sounds (WAV/OGG), including sounds in `audiogroupN.dat` files | ✅ |
 | Run C# scripts (`.csx`), same scripting API as the desktop tool | ✅ |
 | Bundled UTMT scripts (importers, exporters, UTDR scripts, ...) | ✅ (see limitations) |
 | Write and run your own scripts / ad-hoc C# code in the app | ✅ |
-| Image import (replacing sprites/textures), room editor, sound playback | ❌ not yet |
+| Editing tiles and layers in the room editor, adding new sprite frames/sounds | ❌ not yet (use scripts) |
 
 ## Download / install
 
@@ -40,7 +43,11 @@ phones/tablets and x86_64 (emulators, ChromeOS).
 3. **Scripts**: runs any bundled or custom `.csx` script. Put your own scripts in
    `Android/data/com.underminers.undertalemodtool.android/files/UndertaleModTool/Scripts`, or use
    *Import .csx from device*. Long-press a script to view/edit it.
-4. **Save** writes back to the file you opened (if the storage provider allows it); **Save as** creates a new file.
+4. **Images**: open a sprite, background, font, texture page item or embedded texture and use
+   *Replace image...* (sprites ask which frame). **Sounds**: *Play*, *Export audio*, *Replace audio...*.
+   Sounds stored in an audio group file ask you to open `audiogroupN.dat` from the game folder first;
+   replacing such a sound writes that file back directly. **Rooms**: open a room and tap *Room editor*.
+5. **Save** writes back to the file you opened (if the storage provider allows it); **Save as** creates a new file.
 
 Scripts that ask for a folder or file get an in-app file browser. It starts in the script working
 folder (`Android/data/<package>/files/UndertaleModTool`), which you can reach from a PC over USB.
@@ -78,20 +85,29 @@ with your own key.
   * `Services/AndroidScriptHost.cs` implements `IScriptInterface` (the API scripts are written against):
     messages, questions, text input, progress bars, file/folder prompts and search results are shown with
     Android UI.
+  * `Services/ImageCodec.cs` replaces textures without ImageMagick: images are decoded by Android, pasted into
+    the texture page and re-encoded in the page's original format (its own PNG encoder, or UndertaleModLib's
+    managed QOI / BZ2+QOI encoder), mirroring `UndertaleTexturePageItem.ReplaceTexture`.
+  * `Ui/RoomView.cs` renders rooms with Android's Canvas, with decoded texture pages cached in the background.
   * `Activities/` has the screens: main screen, resource lists, a generic reflection-based object editor,
-    the code editor, code search, and the script list, editor and console.
+    the room editor, the code editor, code search, and the script list, editor and console.
 
 ## Limitations
 
 * **ImageMagick is not available on Android** (Magick.NET only ships glibc native libraries). Anything
   that needs it throws `DllNotFoundException`, which mainly means scripts that export/import images through
-  `TextureWorker` (e.g. *ExportAllSprites*, *ImportGraphics*). Previews in the app don't need ImageMagick,
-  but DDS textures can't be previewed.
+  `TextureWorker` (e.g. *ExportAllSprites*, *ImportGraphics*). The app's own previews, image export and
+  *Replace image* don't need ImageMagick, but DDS textures can't be previewed or edited.
+* Replacing an image scales it to the space its texture page item has on the page, like the desktop tool.
+  It can't make that space bigger, and collision masks are not regenerated.
+* The room editor edits instances only. Tiles, layers, backgrounds and views are shown but edited through
+  the property editor; instance colors (blend) are not drawn.
+* External sounds (`.ogg` files next to the game, not inside the data file) can't be played or replaced.
 * Scripts using WPF / WinForms (`System.Windows.*`) can't run: *ImportGraphicsAdvanced*, *FontEditor*,
   *ExportAllRoomsToPNG*. A few other bundled scripts use APIs that no longer exist in UndertaleModLib and
   fail to compile on the desktop tool too.
-* The desktop tool's specialized editors (room editor, sprite editor, ...) are replaced by one generic
-  property editor.
+* Except for rooms, the desktop tool's specialized editors (sprite, font, object editors, ...) are replaced by
+  one generic property editor.
 * The data file is copied into app storage when opened, so GameMaker 2022.9+ games with external texture
   pages can't load those textures.
 * Large games need a lot of RAM (the whole data file is loaded into memory, as on desktop).

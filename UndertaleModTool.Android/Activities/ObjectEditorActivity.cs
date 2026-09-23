@@ -1,6 +1,7 @@
 using System.Collections;
 using System.Reflection;
 using Android.App;
+using Android.Content;
 using Android.Content.PM;
 using Android.Graphics;
 using Android.OS;
@@ -9,6 +10,7 @@ using Android.Views;
 using Android.Widget;
 using UndertaleModLib;
 using UndertaleModLib.Models;
+using UndertaleModLib.Util;
 using UndertaleModTool.Android.Services;
 using UndertaleModTool.Android.Ui;
 
@@ -24,7 +26,7 @@ namespace UndertaleModTool.Android.Activities;
 /// </remarks>
 [Activity(Label = "Editor", ConfigurationChanges = ConfigChanges.Orientation | ConfigChanges.ScreenSize | ConfigChanges.ScreenLayout,
           WindowSoftInputMode = SoftInput.AdjustResize)]
-public class ObjectEditorActivity : Activity
+public class ObjectEditorActivity : BaseActivity
 {
     private object _target;
     private ScrollView _scroll;
@@ -317,33 +319,318 @@ public class ObjectEditorActivity : Activity
 
     #endregion
 
+    #region Menu
+
+    private const int MenuExportPng = 1, MenuReplaceImage = 2, MenuPlay = 3, MenuStop = 4, MenuReplaceAudio = 5,
+                      MenuExportAudio = 6, MenuOpenAudioGroup = 7, MenuRoomEditor = 8;
+
     public override bool OnCreateOptionsMenu(IMenu menu)
     {
+        if (_target is UndertaleRoom)
+            menu.Add(0, MenuRoomEditor, 0, "Room editor")!.SetShowAsAction(ShowAsAction.Always);
+        if (ImageHelper.HasPreview(_target))
+            menu.Add(0, MenuReplaceImage, 1, "Replace image...");
         if (_preview is not null)
-            menu.Add(0, 1, 0, "Export PNG");
+            menu.Add(0, MenuExportPng, 2, "Export PNG");
+        if (_target is UndertaleSound or UndertaleEmbeddedAudio)
+        {
+            menu.Add(0, MenuPlay, 3, "Play")!.SetShowAsAction(ShowAsAction.Always);
+            menu.Add(0, MenuStop, 4, "Stop");
+            menu.Add(0, MenuReplaceAudio, 5, "Replace audio...");
+            menu.Add(0, MenuExportAudio, 6, "Export audio");
+        }
+        if (_target is UndertaleSound sound && !AudioHelper.IsBuiltinGroup(sound))
+            menu.Add(0, MenuOpenAudioGroup, 7, $"Open {AudioHelper.GroupFileName(sound.GroupID)}...");
         return true;
     }
 
     public override bool OnOptionsItemSelected(IMenuItem item)
     {
-        if (item.ItemId == global::Android.Resource.Id.Home)
+        switch (item.ItemId)
         {
-            Finish();
-            return true;
-        }
-        if (item.ItemId == 1 && _preview is not null)
-        {
-            string dir = System.IO.Path.Combine(StorageHelper.WorkDirectory, "Exported images");
-            Directory.CreateDirectory(dir);
-            string name = Navigator.DisplayName(_target);
-            foreach (char c in System.IO.Path.GetInvalidFileNameChars())
-                name = name.Replace(c, '_');
-            string path = System.IO.Path.Combine(dir, name + ".png");
-            using (FileStream fs = File.Create(path))
-                _preview.Compress(Bitmap.CompressFormat.Png!, 100, fs);
-            UiHelper.ShowMessage(this, "Exported", "Saved to " + StorageHelper.Pretty(path));
-            return true;
+            case global::Android.Resource.Id.Home:
+                Finish();
+                return true;
+            case MenuExportPng when _preview is not null:
+                ExportPng();
+                return true;
+            case MenuReplaceImage:
+                ReplaceImage();
+                return true;
+            case MenuPlay:
+                PlayAudio();
+                return true;
+            case MenuStop:
+                AudioHelper.Stop();
+                return true;
+            case MenuReplaceAudio:
+                ReplaceAudio();
+                return true;
+            case MenuExportAudio:
+                ExportAudio();
+                return true;
+            case MenuOpenAudioGroup when _target is UndertaleSound sound:
+                OpenAudioGroup(sound.GroupID);
+                return true;
+            case MenuRoomEditor when _target is UndertaleRoom room:
+                Intent intent = new(this, typeof(RoomEditorActivity));
+                intent.PutExtra(Navigator.ExtraHandle, DataSession.Park(room));
+                StartActivity(intent);
+                return true;
         }
         return base.OnOptionsItemSelected(item);
     }
+
+    protected override void OnPause()
+    {
+        base.OnPause();
+        AudioHelper.Stop();
+    }
+
+    private string SafeFileName()
+    {
+        string name = Navigator.DisplayName(_target);
+        foreach (char c in System.IO.Path.GetInvalidFileNameChars())
+            name = name.Replace(c, '_');
+        return name;
+    }
+
+    private void ExportPng()
+    {
+        string dir = System.IO.Path.Combine(StorageHelper.WorkDirectory, "Exported images");
+        Directory.CreateDirectory(dir);
+        string path = System.IO.Path.Combine(dir, SafeFileName() + ".png");
+        using (FileStream fs = File.Create(path))
+            _preview.Compress(Bitmap.CompressFormat.Png!, 100, fs);
+        UiHelper.ShowMessage(this, "Exported", "Saved to " + StorageHelper.Pretty(path));
+    }
+
+    #endregion
+
+    #region Image import
+
+    private Intent PickIntent(string mime)
+    {
+        Intent intent = new(Intent.ActionOpenDocument);
+        intent.AddCategory(Intent.CategoryOpenable);
+        intent.SetType(mime);
+        return intent;
+    }
+
+    private void ReplaceImage()
+    {
+        switch (_target)
+        {
+            case UndertaleSprite { Textures.Count: > 1 } sprite:
+                string[] frames = Enumerable.Range(0, sprite.Textures.Count).Select(i => $"Frame {i}").ToArray();
+                new AlertDialog.Builder(this)
+                    .SetTitle("Which frame?")!
+                    .SetItems(frames, (_, e) => PickImageFor(sprite.Textures[e.Which]?.Texture, null))!
+                    .Show();
+                break;
+            case UndertaleSprite sprite:
+                PickImageFor(sprite.Textures.FirstOrDefault()?.Texture, null);
+                break;
+            case UndertaleSprite.TextureEntry entry:
+                PickImageFor(entry.Texture, null);
+                break;
+            case UndertaleBackground background:
+                PickImageFor(background.Texture, null);
+                break;
+            case UndertaleFont font:
+                PickImageFor(font.Texture, null);
+                break;
+            case UndertaleTexturePageItem pageItem:
+                PickImageFor(pageItem, null);
+                break;
+            case UndertaleEmbeddedTexture texture:
+                PickImageFor(null, texture);
+                break;
+        }
+    }
+
+    /// <summary>Picks an image and puts it into a texture page item, or replaces a whole page.</summary>
+    private void PickImageFor(UndertaleTexturePageItem item, UndertaleEmbeddedTexture page)
+    {
+        if (item is null && page is null)
+        {
+            UiHelper.ShowMessage(this, "Replace image", "There is no texture to replace.");
+            return;
+        }
+
+        StartForResult(PickIntent("image/*"), (result, data) =>
+        {
+            if (result != Result.Ok || data?.Data is null)
+                return;
+            ArgbImage image;
+            try
+            {
+                image = ImageHelper.DecodeExact(this, data.Data);
+            }
+            catch (Exception e)
+            {
+                UiHelper.ShowLongText(this, "Can't read image", e.ToString());
+                return;
+            }
+
+            string warning = null;
+            if (item is not null && (image.Width != item.SourceWidth || image.Height != item.SourceHeight))
+            {
+                warning = $"The image is {image.Width}x{image.Height}, but the space for it on the texture page is " +
+                          $"{item.SourceWidth}x{item.SourceHeight}. It will be scaled to fit (like the desktop tool does).";
+            }
+            else if (page is not null)
+            {
+                GMImage current = page.TextureData?.Image;
+                if (current is not null && (current.Width != image.Width || current.Height != image.Height))
+                {
+                    warning = $"The image is {image.Width}x{image.Height}, but the current page is {current.Width}x{current.Height}. " +
+                              "Texture page items on this page keep their coordinates, so sprites may break.";
+                }
+            }
+
+            void Apply() => UiHelper.RunWithProgress(this, "Replacing image", _ =>
+            {
+                if (page is not null)
+                    ImageCodec.ReplacePage(page, image);
+                else
+                    ImageCodec.ReplacePageItem(item, image, ImageHelper.DecodePageExact);
+                return true;
+            }, _ =>
+            {
+                DataSession.IsModified = true;
+                UiHelper.Toast(this, "Image replaced");
+                _preview = null;
+                Build();
+                InvalidateOptionsMenu();
+            });
+
+            if (warning is null)
+                Apply();
+            else
+                UiHelper.Confirm(this, "Replace image", warning, Apply, yes: "Continue", no: "Cancel");
+        });
+    }
+
+    #endregion
+
+    #region Audio
+
+    private UndertaleEmbeddedAudio TargetAudio(out string reason)
+    {
+        reason = null;
+        return _target switch
+        {
+            UndertaleEmbeddedAudio audio => audio,
+            UndertaleSound sound => AudioHelper.GetEmbeddedAudio(sound, out reason),
+            _ => null,
+        };
+    }
+
+    private void ShowAudioProblem(string reason)
+    {
+        if (_target is UndertaleSound sound && !AudioHelper.IsBuiltinGroup(sound) && AudioHelper.GetGroupData(sound) is null)
+        {
+            UiHelper.Confirm(this, "Audio group", reason, () => OpenAudioGroup(sound.GroupID), yes: "Open file", no: "Cancel");
+            return;
+        }
+        UiHelper.ShowMessage(this, "Audio", reason ?? "No audio data.");
+    }
+
+    private void PlayAudio()
+    {
+        UndertaleEmbeddedAudio audio = TargetAudio(out string reason);
+        if (audio?.Data is not { Length: > 0 })
+        {
+            ShowAudioProblem(reason);
+            return;
+        }
+        try
+        {
+            AudioHelper.Play(this, audio.Data);
+        }
+        catch (Exception e)
+        {
+            UiHelper.ShowLongText(this, "Playback failed", e.ToString());
+        }
+    }
+
+    private void ExportAudio()
+    {
+        UndertaleEmbeddedAudio audio = TargetAudio(out string reason);
+        if (audio?.Data is not { Length: > 0 })
+        {
+            ShowAudioProblem(reason);
+            return;
+        }
+        string dir = System.IO.Path.Combine(StorageHelper.WorkDirectory, "Exported sounds");
+        Directory.CreateDirectory(dir);
+        string path = System.IO.Path.Combine(dir, SafeFileName() + AudioHelper.DetectExtension(audio.Data));
+        File.WriteAllBytes(path, audio.Data);
+        UiHelper.ShowMessage(this, "Exported", "Saved to " + StorageHelper.Pretty(path));
+    }
+
+    private void ReplaceAudio()
+    {
+        if (TargetAudio(out string reason) is null)
+        {
+            ShowAudioProblem(reason);
+            return;
+        }
+        StartForResult(PickIntent("audio/*"), (result, data) =>
+        {
+            if (result != Result.Ok || data?.Data is null)
+                return;
+            AudioHelper.Stop();
+            UiHelper.RunWithProgress(this, "Replacing audio", _ =>
+            {
+                byte[] bytes;
+                using (Stream input = ContentResolver!.OpenInputStream(data.Data)!)
+                using (MemoryStream ms = new())
+                {
+                    input.CopyTo(ms);
+                    bytes = ms.ToArray();
+                }
+                if (_target is UndertaleSound sound)
+                {
+                    AudioHelper.ReplaceSoundAudio(this, sound, bytes);
+                }
+                else if (_target is UndertaleEmbeddedAudio audio)
+                {
+                    if (AudioHelper.DetectExtension(bytes) is not (".wav" or ".ogg"))
+                        throw new InvalidDataException("Only WAV and OGG files can be used as GameMaker sounds.");
+                    audio.Data = bytes;
+                    DataSession.IsModified = true;
+                }
+                return true;
+            }, _ =>
+            {
+                UiHelper.Toast(this, "Audio replaced");
+                Build();
+            });
+        });
+    }
+
+    private void OpenAudioGroup(int groupId)
+    {
+        Intent intent = PickIntent("*/*");
+        intent.AddFlags(ActivityFlags.GrantReadUriPermission | ActivityFlags.GrantWriteUriPermission | ActivityFlags.GrantPersistableUriPermission);
+        StartForResult(intent, (result, data) =>
+        {
+            if (result != Result.Ok || data?.Data is null)
+                return;
+            try
+            {
+                ContentResolver!.TakePersistableUriPermission(data.Data, ActivityFlags.GrantReadUriPermission | ActivityFlags.GrantWriteUriPermission);
+            }
+            catch
+            {
+                // Read-only is fine for playback.
+            }
+            UiHelper.RunWithProgress(this, "Loading audio group", _ => AudioHelper.LoadGroupFile(this, data.Data, groupId),
+                count => UiHelper.Toast(this, $"Loaded {count} sounds from {AudioHelper.GroupFileName(groupId)}"));
+        });
+    }
+
+    #endregion
 }
