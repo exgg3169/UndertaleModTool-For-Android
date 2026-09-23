@@ -13,6 +13,8 @@ using UndertaleModLib.Models;
 using UndertaleModLib.Util;
 using UndertaleModTool.Android.Services;
 using UndertaleModTool.Android.Ui;
+using UndertaleModTool.Core.Assets;
+using UndertaleModTool.Core.Imaging;
 
 namespace UndertaleModTool.Android.Activities;
 
@@ -322,7 +324,7 @@ public class ObjectEditorActivity : BaseActivity
     #region Menu
 
     private const int MenuExportPng = 1, MenuReplaceImage = 2, MenuPlay = 3, MenuStop = 4, MenuReplaceAudio = 5,
-                      MenuExportAudio = 6, MenuOpenAudioGroup = 7, MenuRoomEditor = 8;
+                      MenuExportAudio = 6, MenuOpenAudioGroup = 7, MenuRoomEditor = 8, MenuAddFrame = 9;
 
     public override bool OnCreateOptionsMenu(IMenu menu)
     {
@@ -330,6 +332,8 @@ public class ObjectEditorActivity : BaseActivity
             menu.Add(0, MenuRoomEditor, 0, "Room editor")!.SetShowAsAction(ShowAsAction.Always);
         if (ImageHelper.HasPreview(_target))
             menu.Add(0, MenuReplaceImage, 1, "Replace image...");
+        if (_target is UndertaleSprite)
+            menu.Add(0, MenuAddFrame, 1, "Add frame...");
         if (_preview is not null)
             menu.Add(0, MenuExportPng, 2, "Export PNG");
         if (_target is UndertaleSound or UndertaleEmbeddedAudio)
@@ -356,6 +360,9 @@ public class ObjectEditorActivity : BaseActivity
                 return true;
             case MenuReplaceImage:
                 ReplaceImage();
+                return true;
+            case MenuAddFrame when _target is UndertaleSprite sprite:
+                AddFrame(sprite);
                 return true;
             case MenuPlay:
                 PlayAudio();
@@ -449,6 +456,25 @@ public class ObjectEditorActivity : BaseActivity
         }
     }
 
+    private void AddFrame(UndertaleSprite sprite)
+    {
+        StartForResult(PickIntent("image/*"), (result, data) =>
+        {
+            if (result != Result.Ok || data?.Data is null)
+                return;
+            UiHelper.RunWithProgress(this, "Adding frame", _ =>
+            {
+                ArgbImage image = ImageHelper.DecodeExact(this, data.Data);
+                return AssetTools.AddSpriteFrame(DataSession.Data, sprite, image);
+            }, frame =>
+            {
+                DataSession.IsModified = true;
+                UiHelper.Toast(this, $"Added frame {frame}");
+                Build();
+            });
+        });
+    }
+
     /// <summary>Picks an image and puts it into a texture page item, or replaces a whole page.</summary>
     private void PickImageFor(UndertaleTexturePageItem item, UndertaleEmbeddedTexture page)
     {
@@ -529,6 +555,28 @@ public class ObjectEditorActivity : BaseActivity
 
     private void ShowAudioProblem(string reason)
     {
+        if (_target is UndertaleSound external && AudioHelper.IsExternal(external))
+        {
+            UiHelper.Confirm(this, "External sound",
+                reason + "\n\nPick that file (from the game folder) to play it, or use \"Replace audio...\" to embed a file into the data.",
+                () => StartForResult(PickIntent("audio/*"), (result, data) =>
+                {
+                    if (result != Result.Ok || data?.Data is null)
+                        return;
+                    try
+                    {
+                        using Stream input = ContentResolver!.OpenInputStream(data.Data)!;
+                        using MemoryStream ms = new();
+                        input.CopyTo(ms);
+                        AudioHelper.Play(this, ms.ToArray());
+                    }
+                    catch (Exception e)
+                    {
+                        UiHelper.ShowLongText(this, "Playback failed", e.ToString());
+                    }
+                }), yes: "Pick file", no: "Cancel");
+            return;
+        }
         if (_target is UndertaleSound sound && !AudioHelper.IsBuiltinGroup(sound) && AudioHelper.GetGroupData(sound) is null)
         {
             UiHelper.Confirm(this, "Audio group", reason, () => OpenAudioGroup(sound.GroupID), yes: "Open file", no: "Cancel");
@@ -572,7 +620,8 @@ public class ObjectEditorActivity : BaseActivity
 
     private void ReplaceAudio()
     {
-        if (TargetAudio(out string reason) is null)
+        bool external = _target is UndertaleSound s && AudioHelper.IsExternal(s);
+        if (!external && TargetAudio(out string reason) is null)
         {
             ShowAudioProblem(reason);
             return;

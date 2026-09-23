@@ -6,6 +6,7 @@ using UndertaleModLib.Models;
 using UndertaleModLib.Project;
 using UndertaleModLib.Scripting;
 using UndertaleModLib.Util;
+using UndertaleModTool.Core.Scripting;
 
 namespace UndertaleModTool.Android.Services;
 

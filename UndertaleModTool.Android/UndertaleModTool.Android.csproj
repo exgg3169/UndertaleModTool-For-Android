@@ -50,6 +50,8 @@
     <ProjectReference Include="..\Underanalyzer\Underanalyzer\Underanalyzer.csproj" GlobalPropertiesToRemove="RuntimeIdentifier;SelfContained" />
     <!-- UndertaleModLib is RID-agnostic managed code; build it once for AnyCPU. -->
     <ProjectReference Include="..\UndertaleModLib\UndertaleModLib.csproj" GlobalPropertiesToRemove="RuntimeIdentifier;SelfContained" />
+    <!-- Platform-independent code (image codecs, script compiler, MCP server); also available to scripts. -->
+    <ProjectReference Include="..\UndertaleModTool.Core\UndertaleModTool.Core.csproj" GlobalPropertiesToRemove="RuntimeIdentifier;SelfContained" />
   </ItemGroup>
 
   <!-- Bundled scripts (the same set that ships with the desktop UndertaleModTool). -->

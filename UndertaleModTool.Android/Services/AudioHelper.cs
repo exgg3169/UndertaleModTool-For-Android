@@ -3,6 +3,7 @@ using Android.Media;
 using Stream = System.IO.Stream;
 using UndertaleModLib;
 using UndertaleModLib.Models;
+using UndertaleModTool.Core.Assets;
 
 namespace UndertaleModTool.Android.Services;
 
@@ -129,19 +130,7 @@ public static class AudioHelper
         ms.CopyTo(output);
     }
 
-    public static string DetectExtension(byte[] data)
-    {
-        if (data.Length >= 4)
-        {
-            if (data[0] == 'R' && data[1] == 'I' && data[2] == 'F' && data[3] == 'F')
-                return ".wav";
-            if (data[0] == 'O' && data[1] == 'g' && data[2] == 'g' && data[3] == 'S')
-                return ".ogg";
-            if (data[0] == 'I' && data[1] == 'D' && data[2] == '3' || data[0] == 0xFF && (data[1] & 0xE0) == 0xE0)
-                return ".mp3";
-        }
-        return ".bin";
-    }
+    public static string DetectExtension(byte[] data) => AssetTools.DetectAudioExtension(data);
 
     /// <summary>Plays audio data; any previous playback is stopped.</summary>
     public static void Play(Context context, byte[] data, Action onCompleted = null)
@@ -205,32 +194,21 @@ public static class AudioHelper
 
     /// <summary>
     /// Replaces a sound's audio with a WAV or OGG file, keeping its audio ID, and updates
-    /// the sound's flags/type like UTMT's ImportSingleSound script.
+    /// the sound's flags/type like UTMT's ImportSingleSound script. External sounds get embedded.
     /// </summary>
     public static void ReplaceSoundAudio(Context context, UndertaleSound sound, byte[] newData)
     {
-        string ext = DetectExtension(newData);
-        if (ext is not (".wav" or ".ogg"))
-            throw new InvalidDataException("Only WAV and OGG files can be used as GameMaker sounds.");
-
-        UndertaleEmbeddedAudio audio = GetEmbeddedAudio(sound, out string reason)
-            ?? throw new InvalidOperationException(reason);
-        audio.Data = newData;
-
-        var flags = UndertaleSound.AudioEntryFlags.Regular;
-        if (ext == ".wav")
+        UndertaleData data = DataSession.Data;
+        if (IsExternal(sound))
         {
-            flags |= UndertaleSound.AudioEntryFlags.IsEmbedded;
+            AssetTools.EmbedSoundAudio(data, sound, newData);
         }
         else
         {
-            // Keep "decode on load" if the sound had it; an embedded OGG is always compressed.
-            flags |= UndertaleSound.AudioEntryFlags.IsCompressed;
-            if (sound.Flags.HasFlag(UndertaleSound.AudioEntryFlags.IsEmbedded))
-                flags |= UndertaleSound.AudioEntryFlags.IsEmbedded;
+            UndertaleEmbeddedAudio audio = GetEmbeddedAudio(sound, out string reason)
+                ?? throw new InvalidOperationException(reason);
+            AssetTools.ReplaceSoundAudio(data, sound, audio, newData);
         }
-        sound.Flags = flags;
-        sound.Type = DataSession.Data.Strings.MakeString(ext);
         if (GetDurationSeconds(context, newData) is float seconds)
             sound.AudioLength = seconds;
 

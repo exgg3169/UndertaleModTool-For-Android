@@ -103,6 +103,7 @@ public class MainActivity : Activity
         menu.Add(0, 3, 2, "Save as...")!.SetEnabled(loaded);
         menu.Add(0, 4, 3, "Scripts")!.SetShowAsAction(ShowAsAction.IfRoom);
         menu.Add(0, 5, 4, "Search in code...")!.SetEnabled(loaded);
+        menu.Add(0, 11, 4, "AI assistant (MCP server)...");
         menu.Add(0, 6, 5, "Load warnings")!.SetEnabled(loaded && DataSession.LoadWarnings.Count > 0);
         menu.Add(0, 7, 6, "New data file");
         menu.Add(0, 8, 7, "Close file")!.SetEnabled(loaded);
@@ -141,6 +142,9 @@ public class MainActivity : Activity
                 return true;
             case 9:
                 RequestFullStorageAccess();
+                return true;
+            case 11:
+                StartActivity(new Intent(this, typeof(McpActivity)));
                 return true;
             case 10:
                 UiHelper.ShowMessage(this, "About",

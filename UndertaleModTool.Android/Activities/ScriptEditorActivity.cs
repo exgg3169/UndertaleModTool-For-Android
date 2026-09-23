@@ -7,6 +7,7 @@ using Android.Views;
 using Android.Widget;
 using UndertaleModTool.Android.Services;
 using UndertaleModTool.Android.Ui;
+using UndertaleModTool.Core.Scripting;
 
 namespace UndertaleModTool.Android.Activities;
 

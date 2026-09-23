@@ -3,6 +3,7 @@ using Android.Graphics;
 using UndertaleModLib.Models;
 using UndertaleModLib.Util;
 using UndertaleModTool.Android.Services;
+using UndertaleModTool.Core.Imaging;
 
 namespace UndertaleModTool.Android.Ui;
 
@@ -99,15 +100,23 @@ public static class ImageHelper
                 return FromBgra(raw.GetRawImageData(), raw.Width, raw.Height,
                                 region ?? new Rect(0, 0, raw.Width, raw.Height));
             }
+            case GMImage.ImageFormat.Dds:
+            {
+                ArgbImage decoded = ImageCodec.TryDecodeManaged(image);
+                if (decoded is null)
+                    return null;
+                if (region is not null)
+                    decoded = decoded.Crop(region.Left, region.Top, region.Width(), region.Height());
+                return ToBitmap(decoded);
+            }
             default:
-                // DDS and unknown formats need ImageMagick.
                 return null;
         }
     }
 
     /// <summary>
-    /// Decodes a whole texture page at full resolution with exact (non-premultiplied) colors,
-    /// for editing. Returns null for formats that can't be decoded on Android (DDS).
+    /// Decodes a whole texture page at full resolution with exact (non-premultiplied) colors, for editing.
+    /// PNG pages are decoded by Android (faster than the managed decoder); other formats by UndertaleModTool.Core.
     /// </summary>
     public static ArgbImage DecodePageExact(UndertaleEmbeddedTexture texture)
     {
@@ -117,6 +126,15 @@ public static class ImageHelper
         if (image.Format == GMImage.ImageFormat.Png)
             return DecodeExact(image.ToSpan().ToArray());
         return ImageCodec.TryDecodeManaged(image);
+    }
+
+    /// <summary>Converts decoded pixels to a bitmap (downscaled if very large).</summary>
+    public static Bitmap ToBitmap(ArgbImage image)
+    {
+        int sample = SampleSize(image.Width, image.Height);
+        if (sample > 1)
+            image = image.Resize(Math.Max(1, image.Width / sample), Math.Max(1, image.Height / sample));
+        return Bitmap.CreateBitmap(image.Pixels, image.Width, image.Height, Bitmap.Config.Argb8888!)!;
     }
 
     /// <summary>Decodes an image file (PNG, JPEG, WebP, GIF, BMP...) with exact colors.</summary>
@@ -136,7 +154,9 @@ public static class ImageHelper
         using Stream input = context.ContentResolver!.OpenInputStream(uri)!;
         using MemoryStream ms = new();
         input.CopyTo(ms);
-        return DecodeExact(ms.ToArray());
+        byte[] bytes = ms.ToArray();
+        // DDS isn't supported by Android's decoders.
+        return DdsDecoder.IsDds(bytes) ? DdsDecoder.Decode(bytes) : DecodeExact(bytes);
     }
 
     private static Rect ClampRegion(Rect region, int width, int height)

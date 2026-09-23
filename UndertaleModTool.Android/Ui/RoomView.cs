@@ -30,9 +30,7 @@ public sealed class RoomView : global::Android.Views.View
 
     public bool SnapToGrid { get; set; } = true;
 
-    public GameObject SelectedInstance { get; private set; }
-
-    /// <summary>Raised when the selection changes or the selected instance moves.</summary>
+    /// <summary>Raised when the selection changes or the selected item moves.</summary>
     public event Action SelectionChanged;
 
     public RoomView(Context context, UndertaleRoom room) : base(context)
@@ -107,11 +105,13 @@ public sealed class RoomView : global::Android.Views.View
         // Room bounds and selection
         _outlinePaint.StrokeWidth = 1 / _scale;
         canvas.DrawRect(0, 0, _room.Width, _room.Height, _outlinePaint);
-        if (SelectedInstance is not null)
+        if (SelectedItem is not null)
         {
             _selectPaint.StrokeWidth = 2 / _scale;
-            canvas.DrawRect(InstanceBounds(SelectedInstance), _selectPaint);
+            canvas.DrawRect(ItemBounds(SelectedItem), _selectPaint);
         }
+        if (Mode == EditMode.Paint && PaintLayer?.TilesData?.Background is { } tileset)
+            DrawTileGrid(canvas, PaintLayer, tileset);
         canvas.Restore();
     }
 
@@ -220,6 +220,22 @@ public sealed class RoomView : global::Android.Views.View
         canvas.DrawBitmap(page, ScaledRect(sx, sy, (int)tile.Width, (int)tile.Height, factor),
                           new RectF(0, 0, tile.Width, tile.Height), _bitmapPaint);
         canvas.Restore();
+    }
+
+    private void DrawTileGrid(Canvas canvas, Layer layer, UndertaleBackground tileset)
+    {
+        var tiles = layer.TilesData;
+        float w = tileset.GMS2TileWidth, h = tileset.GMS2TileHeight;
+        if (w <= 0 || h <= 0 || tiles.TileData is null)
+            return;
+        _outlinePaint.StrokeWidth = 1 / _scale;
+        _outlinePaint.Color = Color.Argb(70, 255, 255, 255);
+        float right = layer.XOffset + tiles.TilesX * w, bottom = layer.YOffset + tiles.TilesY * h;
+        for (int x = 0; x <= tiles.TilesX; x++)
+            canvas.DrawLine(layer.XOffset + x * w, layer.YOffset, layer.XOffset + x * w, bottom, _outlinePaint);
+        for (int y = 0; y <= tiles.TilesY; y++)
+            canvas.DrawLine(layer.XOffset, layer.YOffset + y * h, right, layer.YOffset + y * h, _outlinePaint);
+        _outlinePaint.Color = Color.Argb(160, 255, 255, 255);
     }
 
     private void DrawTileLayer(Canvas canvas, Layer layer, Layer.LayerTilesData tiles)
@@ -333,7 +349,30 @@ public sealed class RoomView : global::Android.Views.View
 
     #endregion
 
-    #region Instances
+    #region Selection & editing
+
+    public enum EditMode
+    {
+        /// <summary>Select and move object instances.</summary>
+        Instances,
+        /// <summary>Select and move tiles (GMS1 tiles, legacy asset tiles) and asset-layer sprites.</summary>
+        Tiles,
+        /// <summary>Paint tiles on a GMS2 tile layer.</summary>
+        Paint,
+    }
+
+    public EditMode Mode { get; set; } = EditMode.Instances;
+
+    /// <summary>Tile layer to paint on (Paint mode).</summary>
+    public Layer PaintLayer { get; set; }
+
+    /// <summary>Tile index to paint (0 erases). May include mirror/flip/rotate flags in the top bits.</summary>
+    public uint PaintTile { get; set; }
+
+    /// <summary>The selected GameObject, Tile or SpriteInstance.</summary>
+    public object SelectedItem { get; private set; }
+
+    public GameObject SelectedInstance => SelectedItem as GameObject;
 
     /// <summary>All instances in draw order (bottom first).</summary>
     public IEnumerable<GameObject> InstancesInDrawOrder()
@@ -349,29 +388,80 @@ public sealed class RoomView : global::Android.Views.View
                                 .Select(p => p.o);
     }
 
-    public RectF InstanceBounds(GameObject obj)
+    /// <summary>All tiles and asset sprites in draw order (bottom first).</summary>
+    public IEnumerable<object> TilesInDrawOrder()
     {
-        UndertaleSprite sprite = obj.ObjectDefinition?.Sprite;
+        if (!IsLayerRoom)
+            return _room.Tiles.Select((t, i) => (t, i)).OrderByDescending(p => p.t.TileDepth).ThenBy(p => p.i).Select(p => (object)p.t);
+        return _room.Layers.Where(l => l is { IsVisible: true, AssetsData: not null } && !HiddenLayers.Contains(l))
+                           .OrderByDescending(l => l.LayerDepth)
+                           .SelectMany(l => (l.AssetsData.LegacyTiles?.Cast<object>() ?? Enumerable.Empty<object>())
+                                .Concat(l.AssetsData.Sprites?.Cast<object>() ?? Enumerable.Empty<object>()));
+    }
+
+    public RectF InstanceBounds(GameObject obj) => SpriteBounds(obj.ObjectDefinition?.Sprite, obj.X, obj.Y, obj.ScaleX, obj.ScaleY, obj.Rotation);
+
+    private static RectF SpriteBounds(UndertaleSprite sprite, float x, float y, float scaleX, float scaleY, float rotation)
+    {
         if (sprite is null || sprite.Textures.Count == 0)
-            return new RectF(obj.X - 8, obj.Y - 8, obj.X + 8, obj.Y + 8);
-        float x1 = obj.X - sprite.OriginXWrapper * obj.ScaleX, y1 = obj.Y - sprite.OriginYWrapper * obj.ScaleY;
-        float x2 = x1 + sprite.Width * obj.ScaleX, y2 = y1 + sprite.Height * obj.ScaleY;
+            return new RectF(x - 8, y - 8, x + 8, y + 8);
+        float x1 = x - sprite.OriginXWrapper * scaleX, y1 = y - sprite.OriginYWrapper * scaleY;
+        float x2 = x1 + sprite.Width * scaleX, y2 = y1 + sprite.Height * scaleY;
         RectF r = new(Math.Min(x1, x2), Math.Min(y1, y2), Math.Max(x1, x2), Math.Max(y1, y2));
-        if (obj.Rotation % 360 != 0)
+        if (rotation % 360 != 0)
         {
             using Matrix m = new();
-            m.SetRotate(-obj.Rotation, obj.X, obj.Y);
+            m.SetRotate(-rotation, x, y);
             m.MapRect(r);
         }
         return r;
     }
 
-    public GameObject HitTest(float roomX, float roomY)
-        => InstancesInDrawOrder().LastOrDefault(o => InstanceBounds(o).Contains(roomX, roomY));
-
-    public void Select(GameObject obj)
+    public RectF ItemBounds(object item) => item switch
     {
-        SelectedInstance = obj;
+        GameObject obj => InstanceBounds(obj),
+        Tile tile => new RectF(Math.Min(tile.X, tile.X + tile.Width * tile.ScaleX), Math.Min(tile.Y, tile.Y + tile.Height * tile.ScaleY),
+                               Math.Max(tile.X, tile.X + tile.Width * tile.ScaleX), Math.Max(tile.Y, tile.Y + tile.Height * tile.ScaleY)),
+        SpriteInstance sprite => SpriteBounds(sprite.Sprite, sprite.X, sprite.Y, sprite.ScaleX, sprite.ScaleY, sprite.Rotation),
+        _ => new RectF(),
+    };
+
+    private static (int X, int Y) PositionOf(object item) => item switch
+    {
+        GameObject obj => (obj.X, obj.Y),
+        Tile tile => (tile.X, tile.Y),
+        SpriteInstance sprite => (sprite.X, sprite.Y),
+        _ => (0, 0),
+    };
+
+    private static void MoveTo(object item, int x, int y)
+    {
+        switch (item)
+        {
+            case GameObject obj:
+                obj.X = x;
+                obj.Y = y;
+                break;
+            case Tile tile:
+                tile.X = x;
+                tile.Y = y;
+                break;
+            case SpriteInstance sprite:
+                sprite.X = x;
+                sprite.Y = y;
+                break;
+        }
+    }
+
+    public object HitTest(float roomX, float roomY)
+    {
+        IEnumerable<object> candidates = Mode == EditMode.Tiles ? TilesInDrawOrder() : InstancesInDrawOrder();
+        return candidates.LastOrDefault(o => ItemBounds(o).Contains(roomX, roomY));
+    }
+
+    public void Select(object item)
+    {
+        SelectedItem = item;
         Invalidate();
         SelectionChanged?.Invoke();
     }
@@ -379,57 +469,77 @@ public sealed class RoomView : global::Android.Views.View
     public int Snap(float value, double grid)
         => SnapToGrid && grid >= 1 ? (int)(Math.Round(value / grid) * grid) : (int)Math.Round(value);
 
+    /// <summary>Paints <see cref="PaintTile"/> into the tile cell under a room position.</summary>
+    private bool PaintAt(float roomX, float roomY)
+    {
+        if (PaintLayer?.TilesData is not { TileData: not null } tiles || tiles.Background is null)
+            return false;
+        int w = (int)tiles.Background.GMS2TileWidth, h = (int)tiles.Background.GMS2TileHeight;
+        if (w <= 0 || h <= 0)
+            return false;
+        int cx = (int)Math.Floor((roomX - PaintLayer.XOffset) / w), cy = (int)Math.Floor((roomY - PaintLayer.YOffset) / h);
+        if (cy < 0 || cy >= tiles.TileData.Length || tiles.TileData[cy] is not { } row || cx < 0 || cx >= row.Length)
+            return false;
+        if (row[cx] == PaintTile)
+            return false;
+        row[cx] = PaintTile;
+        DataSession.IsModified = true;
+        return true;
+    }
+
     #endregion
 
     #region Touch
 
     private float _downX, _downY, _lastX, _lastY;
-    private bool _dragInstance, _moved, _multiTouch;
+    private bool _dragItem, _moved, _multiTouch;
     private float _dragStartX, _dragStartY;
 
     public override bool OnTouchEvent(MotionEvent e)
     {
         _scaleDetector.OnTouchEvent(e);
         float slop = ViewConfiguration.Get(Context)!.ScaledTouchSlop;
+        float rx = (e.GetX() - _offsetX) / _scale, ry = (e.GetY() - _offsetY) / _scale;
 
         switch (e.ActionMasked)
         {
             case MotionEventActions.Down:
-                _downX = _lastX = e.GetX();
-                _downY = _lastY = e.GetY();
+                _downX = e.GetX();
+                _downY = e.GetY();
+                _lastX = e.GetX();
+                _lastY = e.GetY();
                 _moved = _multiTouch = false;
-                float rx = (e.GetX() - _offsetX) / _scale, ry = (e.GetY() - _offsetY) / _scale;
-                _dragInstance = SelectedInstance is not null && InstanceBounds(SelectedInstance).Contains(rx, ry);
-                if (_dragInstance)
-                {
-                    _dragStartX = SelectedInstance.X;
-                    _dragStartY = SelectedInstance.Y;
-                }
+                _dragItem = Mode != EditMode.Paint && SelectedItem is not null && ItemBounds(SelectedItem).Contains(rx, ry);
+                if (_dragItem)
+                    (_dragStartX, _dragStartY) = PositionOf(SelectedItem);
+                if (Mode == EditMode.Paint && PaintAt(rx, ry))
+                    Invalidate();
                 return true;
 
             case MotionEventActions.PointerDown:
                 _multiTouch = true;
-                _dragInstance = false;
+                _dragItem = false;
                 return true;
 
             case MotionEventActions.Move:
                 if (_multiTouch || _scaleDetector.IsInProgress)
+                    return true;
+                if (Mode == EditMode.Paint)
                 {
-                    _lastX = e.GetX();
-                    _lastY = e.GetY();
+                    if (PaintAt(rx, ry))
+                        Invalidate();
                     return true;
                 }
                 if (!_moved && Math.Abs(e.GetX() - _downX) < slop && Math.Abs(e.GetY() - _downY) < slop)
                     return true;
                 _moved = true;
-                if (_dragInstance)
+                if (_dragItem)
                 {
                     float dx = (e.GetX() - _downX) / _scale, dy = (e.GetY() - _downY) / _scale;
                     int nx = Snap(_dragStartX + dx, _room.GridWidth), ny = Snap(_dragStartY + dy, _room.GridHeight);
-                    if (nx != SelectedInstance.X || ny != SelectedInstance.Y)
+                    if ((nx, ny) != PositionOf(SelectedItem))
                     {
-                        SelectedInstance.X = nx;
-                        SelectedInstance.Y = ny;
+                        MoveTo(SelectedItem, nx, ny);
                         DataSession.IsModified = true;
                         SelectionChanged?.Invoke();
                     }
@@ -445,11 +555,8 @@ public sealed class RoomView : global::Android.Views.View
                 return true;
 
             case MotionEventActions.Up:
-                if (!_moved && !_multiTouch)
-                {
-                    float tx = (e.GetX() - _offsetX) / _scale, ty = (e.GetY() - _offsetY) / _scale;
-                    Select(HitTest(tx, ty));
-                }
+                if (!_moved && !_multiTouch && Mode != EditMode.Paint)
+                    Select(HitTest(rx, ry));
                 return true;
         }
         return base.OnTouchEvent(e);
@@ -458,16 +565,27 @@ public sealed class RoomView : global::Android.Views.View
     private sealed class ScaleListener : ScaleGestureDetector.SimpleOnScaleGestureListener
     {
         private readonly RoomView _view;
+        private float _focusX, _focusY;
 
         public ScaleListener(RoomView view) => _view = view;
 
+        public override bool OnScaleBegin(ScaleGestureDetector detector)
+        {
+            _focusX = detector.FocusX;
+            _focusY = detector.FocusY;
+            return true;
+        }
+
         public override bool OnScale(ScaleGestureDetector detector)
         {
+            // Two-finger gestures zoom around the focus point and pan with it.
             float newScale = Math.Clamp(_view._scale * detector.ScaleFactor, 0.05f, 32f);
             float fx = detector.FocusX, fy = detector.FocusY;
-            _view._offsetX = fx - (fx - _view._offsetX) * (newScale / _view._scale);
-            _view._offsetY = fy - (fy - _view._offsetY) * (newScale / _view._scale);
+            _view._offsetX = fx - (_focusX - _view._offsetX) * (newScale / _view._scale);
+            _view._offsetY = fy - (_focusY - _view._offsetY) * (newScale / _view._scale);
             _view._scale = newScale;
+            _focusX = fx;
+            _focusY = fy;
             _view.Invalidate();
             return true;
         }

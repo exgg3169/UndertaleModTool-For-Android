@@ -1,11 +1,15 @@
 using System.Collections;
 using Android.App;
+using Android.Content;
 using Android.Content.PM;
 using Android.OS;
 using Android.Text;
 using Android.Views;
 using Android.Widget;
+using UndertaleModLib;
 using UndertaleModLib.Models;
+using UndertaleModTool.Core.Assets;
+using UndertaleModTool.Core.Imaging;
 using UndertaleModTool.Android.Services;
 using UndertaleModTool.Android.Ui;
 
@@ -15,7 +19,7 @@ namespace UndertaleModTool.Android.Activities;
 /// Shows the items of a list (a resource category, or any list inside a resource) with a filter box.
 /// </summary>
 [Activity(Label = "Resources", ConfigurationChanges = ConfigChanges.Orientation | ConfigChanges.ScreenSize | ConfigChanges.ScreenLayout)]
-public class ResourceListActivity : Activity
+public class ResourceListActivity : BaseActivity
 {
     private IEnumerable _source;
     private EditText _filter;
@@ -131,15 +135,102 @@ public class ResourceListActivity : Activity
         });
     }
 
+    #region Adding resources
+
+    private bool IsSounds => DataSession.Data is not null && ReferenceEquals(_source, DataSession.Data.Sounds);
+    private bool IsSprites => DataSession.Data is not null && ReferenceEquals(_source, DataSession.Data.Sprites);
+
+    public override bool OnCreateOptionsMenu(IMenu menu)
+    {
+        if (IsSounds)
+            menu.Add(0, 1, 0, "Add sound...");
+        if (IsSprites)
+        {
+            menu.Add(0, 2, 0, "New sprite from image...");
+            menu.Add(0, 3, 1, "Import images from folder...");
+        }
+        return true;
+    }
+
     public override bool OnOptionsItemSelected(IMenuItem item)
     {
-        if (item.ItemId == global::Android.Resource.Id.Home)
+        switch (item.ItemId)
         {
-            Finish();
-            return true;
+            case global::Android.Resource.Id.Home:
+                Finish();
+                return true;
+            case 1:
+                PickAndName("audio/*", "snd_new", "Sound name", (bytes, name) =>
+                    AssetTools.AddSound(DataSession.Data, name, bytes).Name.Content);
+                return true;
+            case 2:
+                PickAndName("image/*", "spr_new", "Sprite name", (bytes, name) =>
+                {
+                    if (DataSession.Data.Sprites.ByName(name) is not null)
+                        throw new InvalidOperationException($"A sprite named \"{name}\" already exists.");
+                    ArgbImage image = DdsDecoder.IsDds(bytes) ? DdsDecoder.Decode(bytes) : ImageHelper.DecodeExact(bytes);
+                    return AssetTools.ImportImages(DataSession.Data, new[] { (name + "_0", image) }).ToString();
+                });
+                return true;
+            case 3:
+                FileBrowserDialog.Show(this, Services.FileBrowserMode.Directory, null, folder =>
+                {
+                    if (folder is null)
+                        return;
+                    UiHelper.RunWithProgress(this, "Importing images", report =>
+                    {
+                        var files = Directory.GetFiles(folder, "*.png").OrderBy(f => f, StringComparer.Ordinal).ToList();
+                        List<(string, ArgbImage)> images = new();
+                        foreach (string file in files)
+                        {
+                            report($"Reading {Path.GetFileName(file)}");
+                            images.Add((Path.GetFileNameWithoutExtension(file), PngDecoder.Decode(file)));
+                        }
+                        report("Packing texture pages...");
+                        return AssetTools.ImportImages(DataSession.Data, images).ToString();
+                    }, summary =>
+                    {
+                        DataSession.IsModified = true;
+                        ApplyFilter();
+                        UiHelper.ShowLongText(this, "Import finished", summary);
+                    });
+                });
+                return true;
         }
         return base.OnOptionsItemSelected(item);
     }
+
+    /// <summary>Picks a file, asks for a name, then runs <paramref name="create"/> in the background.</summary>
+    private void PickAndName(string mime, string defaultName, string label, Func<byte[], string, string> create)
+    {
+        Intent intent = new(Intent.ActionOpenDocument);
+        intent.AddCategory(Intent.CategoryOpenable);
+        intent.SetType(mime);
+        StartForResult(intent, (result, data) =>
+        {
+            if (result != Result.Ok || data?.Data is null)
+                return;
+            UiHelper.PromptText(this, label, null, defaultName, false, name =>
+            {
+                if (string.IsNullOrWhiteSpace(name))
+                    return;
+                UiHelper.RunWithProgress(this, "Adding", _ =>
+                {
+                    using Stream input = ContentResolver!.OpenInputStream(data.Data)!;
+                    using MemoryStream ms = new();
+                    input.CopyTo(ms);
+                    return create(ms.ToArray(), name.Trim());
+                }, message =>
+                {
+                    DataSession.IsModified = true;
+                    ApplyFilter();
+                    UiHelper.Toast(this, "Added " + message);
+                });
+            });
+        });
+    }
+
+    #endregion
 
     private sealed class ItemAdapter : BaseAdapter
     {

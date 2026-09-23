@@ -19,14 +19,17 @@ On top of that it adds a new native Android UI (`UndertaleModTool.Android`, .NET
 | Decompile code to GML, edit and recompile it | ✅ |
 | Disassemble code, edit and reassemble it | ✅ |
 | Search in all decompiled code (plain text or regex) | ✅ |
-| Texture / sprite / background / font previews, export to PNG | ✅ (PNG, QOI and BZ2+QOI pages) |
+| Texture / sprite / background / font previews, export to PNG | ✅ (PNG, QOI, BZ2+QOI and DDS pages) |
 | Replace images: sprite frames, backgrounds, fonts, texture page items, whole texture pages | ✅ |
-| Room editor: view rooms (GMS1 backgrounds/tiles, GMS2 layers), select, move, add, duplicate and delete instances | ✅ |
-| Play, export and replace sounds (WAV/OGG), including sounds in `audiogroupN.dat` files | ✅ |
+| Add sprite frames, new sprites from images, import a folder of PNGs (like desktop ImportGraphics) | ✅ |
+| Room editor: GMS1 backgrounds/tiles and GMS2 layers; move/add/duplicate/delete instances, tiles and asset sprites; paint tile layers | ✅ |
+| Play, export, replace and add sounds (WAV/OGG), incl. `audiogroupN.dat` files and external `.ogg` sounds | ✅ |
+| DDS textures (preview, export, replace) | ✅ |
+| **AI assistant support: MCP server** — Claude Code, Claude Desktop and other MCP clients can edit the game | ✅ |
 | Run C# scripts (`.csx`), same scripting API as the desktop tool | ✅ |
 | Bundled UTMT scripts (importers, exporters, UTDR scripts, ...) | ✅ (see limitations) |
 | Write and run your own scripts / ad-hoc C# code in the app | ✅ |
-| Editing tiles and layers in the room editor, adding new sprite frames/sounds | ❌ not yet (use scripts) |
+| Adding/removing room layers, views and backgrounds visually | ❌ (edit existing ones in the property editor; scripts / `run_csharp` can do anything) |
 
 ## Download / install
 
@@ -46,13 +49,46 @@ phones/tablets and x86_64 (emulators, ChromeOS).
 4. **Images**: open a sprite, background, font, texture page item or embedded texture and use
    *Replace image...* (sprites ask which frame). **Sounds**: *Play*, *Export audio*, *Replace audio...*.
    Sounds stored in an audio group file ask you to open `audiogroupN.dat` from the game folder first;
-   replacing such a sound writes that file back directly. **Rooms**: open a room and tap *Room editor*.
+   replacing such a sound writes that file back directly. External sounds can be played by picking their `.ogg`,
+   and *Replace audio* embeds them. The Sprites and Sounds lists have *New sprite from image*, *Import images from
+   folder* and *Add sound* in their menu; sprites have *Add frame*. **Rooms**: open a room and tap *Room editor*;
+   *Edit mode* switches between instances, tiles & asset sprites, and painting GMS2 tile layers.
 5. **Save** writes back to the file you opened (if the storage provider allows it); **Save as** creates a new file.
 
 Scripts that ask for a folder or file get an in-app file browser. It starts in the script working
 folder (`Android/data/<package>/files/UndertaleModTool`), which you can reach from a PC over USB.
 Files from anywhere else can be brought in with *From device...*. To let scripts use any path on
 internal storage, use *menu → Grant full storage access*.
+
+## AI assistants (MCP server)
+
+*Menu → AI assistant (MCP server)* starts a [Model Context Protocol](https://modelcontextprotocol.io) server inside
+the app, so an AI assistant can work on the loaded game for you: explore resources, decompile and rewrite code, edit
+strings, look at and replace sprites, move things around in rooms, add sounds and run UTMT scripts. It keeps running
+in the background (with a notification) while the server is on.
+
+Every request needs the access token shown on that screen. Ways to connect:
+
+* **On the phone itself** (e.g. Claude Code in [Termux](https://termux.dev)):
+  ```sh
+  claude mcp add --transport http undertalemodtool http://127.0.0.1:8765/mcp --header "Authorization: Bearer <TOKEN>"
+  ```
+* **From a computer over USB**: run `adb forward tcp:8765 tcp:8765`, then use the same command on the computer.
+* **Over Wi-Fi**: enable *Allow network access* in the app and use `http://<phone IP>:8765/mcp` (shown in the app).
+* **Clients that only launch local commands** (e.g. Claude Desktop): use
+  [`mcp-remote`](https://www.npmjs.com/package/mcp-remote); the app has a *Copy JSON config* button.
+
+The buttons on the screen copy these commands with your token filled in. The server also serves a small **web
+console** at `http://127.0.0.1:8765/` where you can try every tool from a browser.
+
+Tools: `get_status`, `open_data_file`, `save_data_file`, `list_files`, `read_file`, `write_file`, `list_resources`,
+`get_resource`, `set_resource_property`, `set_string`, `decompile_code`, `disassemble_code`, `import_code`,
+`assemble_code`, `search_code`, `get_image`, `replace_image`, `add_sprite_frame`, `export_images`, `import_images`,
+`get_room`, `add_instance`, `update_instance`, `delete_instance`, `export_sound`, `replace_sound`, `add_sound`,
+`run_csharp`, `list_scripts`, `run_script`. Changes stay in memory until `save_data_file` (or *Save* in the app).
+
+> The token gives full control over the app, including running C# scripts, so only share it with clients you trust
+> and leave *Allow network access* off unless you need it.
 
 ## Building
 
@@ -75,7 +111,15 @@ with your own key.
 
 * `UndertaleModLib/`, `Underanalyzer/`, `UndertaleModCli/` and the bundled scripts are taken unmodified
   from upstream UndertaleModTool (commit `f43e12c`, Underanalyzer `4ff50a8`).
-* `UndertaleModTool.Android/` is the new app:
+* `UndertaleModTool.Core/` holds everything that doesn't need Android, so it's tested on desktop .NET
+  (`dotnet run --project UndertaleModTool.Core.Tests`, also run by CI):
+  * `Imaging/` — ImageMagick-free image code: PNG encoder and decoder (all color types/bit depths, interlacing),
+    DDS decoder (DXT1/3/5, uncompressed), texture page item extraction/replacement. Scripts can use it too
+    (`using UndertaleModTool.Core.Imaging;`), see `Scripts/Android Scripts/`.
+  * `Assets/` — adding sprite frames and sounds, packing imported images onto texture pages, collision masks.
+  * `Scripting/` — the Roslyn script compiler and a headless `IScriptInterface` for scripts run by AI assistants.
+  * `Mcp/` — the MCP server: JSON-RPC protocol, Streamable HTTP transport, the tools and the web console.
+* `UndertaleModTool.Android/` is the app:
   * `Services/ScriptCompiler.cs` compiles and runs `.csx` scripts with Roslyn. On Android, assemblies live
     inside the APK and have no file path, so `Microsoft.CodeAnalysis.Scripting` can't be used directly.
     Instead, the exact reference assemblies the app is built against are embedded into it at build time
@@ -94,15 +138,15 @@ with your own key.
 
 ## Limitations
 
-* **ImageMagick is not available on Android** (Magick.NET only ships glibc native libraries). Anything
-  that needs it throws `DllNotFoundException`, which mainly means scripts that export/import images through
-  `TextureWorker` (e.g. *ExportAllSprites*, *ImportGraphics*). The app's own previews, image export and
-  *Replace image* don't need ImageMagick, but DDS textures can't be previewed or edited.
-* Replacing an image scales it to the space its texture page item has on the page, like the desktop tool.
-  It can't make that space bigger, and collision masks are not regenerated.
-* The room editor edits instances only. Tiles, layers, backgrounds and views are shown but edited through
-  the property editor; instance colors (blend) are not drawn.
-* External sounds (`.ogg` files next to the game, not inside the data file) can't be played or replaced.
+* **ImageMagick is not available on Android** (Magick.NET only ships glibc native libraries), so the desktop
+  scripts that use it (`TextureWorker`, e.g. *Resource Exporters/ExportAllSprites*, *Resource Importers/ImportGraphics*)
+  throw `DllNotFoundException`. Use the ImageMagick-free versions in **Scripts/Android Scripts** instead
+  (ExportAllSprites, ExportAllBackgroundsAndFonts, ExportAllTexturePages, ImportGraphics), or the app's own
+  image features. Everything image-related in the app works without ImageMagick.
+* *Replace image* scales the image to the space its texture page item has on the page, like the desktop tool.
+  To change a sprite's size, use *Import images from folder...* / ImportGraphics, which packs images onto new pages.
+* The room editor doesn't draw instance blend colors, and can't add or remove layers, views or backgrounds
+  (existing ones can be edited in the property editor; scripts can add them).
 * Scripts using WPF / WinForms (`System.Windows.*`) can't run: *ImportGraphicsAdvanced*, *FontEditor*,
   *ExportAllRoomsToPNG*. A few other bundled scripts use APIs that no longer exist in UndertaleModLib and
   fail to compile on the desktop tool too.

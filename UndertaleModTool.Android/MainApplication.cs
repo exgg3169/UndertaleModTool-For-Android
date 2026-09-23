@@ -2,6 +2,7 @@ using Android.App;
 using Android.Runtime;
 using UndertaleModLib.Decompiler;
 using UndertaleModTool.Android.Services;
+using UndertaleModTool.Core.Scripting;
 
 namespace UndertaleModTool.Android;
 
@@ -27,5 +28,9 @@ public class MainApplication : Application
 
         // UndertaleModLib looks for "GameSpecificData" next to the executable by default.
         GameSpecificResolver.BaseDirectory = StorageHelper.LibDataDirectory;
+
+        // Scripts compile against the reference assemblies embedded into this app (see the .csproj).
+        ScriptCompiler.ReferenceAssemblySource = typeof(MainApplication).Assembly;
+        ScriptCompiler.DefaultBaseDirectory = StorageHelper.WorkDirectory;
     }
 }
