@@ -1,0 +1,40 @@
+name: Build Android APK
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Install .NET Android workload
+        run: dotnet workload install android
+
+      - name: Install Android SDK dependencies
+        run: >
+          dotnet build UndertaleModTool.Android -t:InstallAndroidDependencies -f net10.0-android
+          -p:AndroidSdkDirectory=$ANDROID_SDK_ROOT -p:AcceptAndroidSDKLicenses=True
+
+      - name: Build CLI (sanity check for UndertaleModLib)
+        run: dotnet build UndertaleModCli -c Release
+
+      - name: Build APK
+        run: dotnet publish UndertaleModTool.Android -c Release -p:AndroidSdkDirectory=$ANDROID_SDK_ROOT
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: UndertaleModTool-Android
+          path: UndertaleModTool.Android/bin/Release/net10.0-android/publish/*-Signed.apk
