@@ -1,0 +1,79 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0-android</TargetFramework>
+    <SupportedOSPlatformVersion>24</SupportedOSPlatformVersion>
+    <OutputType>Exe</OutputType>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>13.0</LangVersion>
+    <RootNamespace>UndertaleModTool.Android</RootNamespace>
+    <AssemblyName>UndertaleModTool.Android</AssemblyName>
+
+    <ApplicationId>com.underminers.undertalemodtool.android</ApplicationId>
+    <ApplicationDisplayVersion>0.9.2</ApplicationDisplayVersion>
+    <ApplicationVersion>9200</ApplicationVersion>
+    <ApplicationTitle>UndertaleModTool</ApplicationTitle>
+    <Copyright>Copyright ©  2018-2026, licensed under GPLv3</Copyright>
+
+    <!-- 64-bit ARM phones/tablets, plus x86_64 for emulators and ChromeOS. -->
+    <RuntimeIdentifiers>android-arm64;android-x64</RuntimeIdentifiers>
+
+    <!--
+      C# scripts (.csx) are compiled at runtime with Roslyn and may use any public API of
+      UndertaleModLib or the BCL, so nothing may be trimmed away, and the Mono JIT must be
+      available to load the emitted script assemblies.
+    -->
+    <PublishTrimmed>false</PublishTrimmed>
+    <RunAOTCompilation>false</RunAOTCompilation>
+    <AndroidEnableProfiledAot>false</AndroidEnableProfiledAot>
+    <AndroidPackageFormat>apk</AndroidPackageFormat>
+    <AndroidUseAssemblyStore>true</AndroidUseAssemblyStore>
+
+    <NoWarn>$(NoWarn);CA1416;CA1422;XA4218</NoWarn>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <!-- Sign with the debug keystore by default so the APK is installable out of the box.
+         Pass -p:AndroidSigningKeyStore=... etc. for a real release key. -->
+    <AndroidKeyStore Condition="'$(AndroidSigningKeyStore)' != ''">true</AndroidKeyStore>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="5.9.0" />
+    <!-- Magick.NET's native library is built for glibc and cannot load on Android (bionic),
+         so don't ship it. Managed code paths that need it will throw a DllNotFoundException. -->
+    <PackageReference Include="Magick.NET-Q8-AnyCPU" Version="14.16.0" ExcludeAssets="native" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Underanalyzer\Underanalyzer\Underanalyzer.csproj" GlobalPropertiesToRemove="RuntimeIdentifier;SelfContained" />
+    <!-- UndertaleModLib is RID-agnostic managed code; build it once for AnyCPU. -->
+    <ProjectReference Include="..\UndertaleModLib\UndertaleModLib.csproj" GlobalPropertiesToRemove="RuntimeIdentifier;SelfContained" />
+  </ItemGroup>
+
+  <!-- Bundled scripts (the same set that ships with the desktop UndertaleModTool). -->
+  <ItemGroup>
+    <AndroidAsset Include="Scripts\**\*" Link="Assets\Scripts\%(RecursiveDir)%(Filename)%(Extension)" />
+  </ItemGroup>
+
+  <!-- Game-specific decompiler/compiler definitions used by UndertaleModLib. -->
+  <ItemGroup>
+    <AndroidAsset Include="..\UndertaleModLib\GameSpecificData\**\*" Link="Assets\GameSpecificData\%(RecursiveDir)%(Filename)%(Extension)" />
+  </ItemGroup>
+
+  <!--
+    On Android, assemblies live inside the APK's assembly store and have no file location,
+    so Roslyn cannot create metadata references from them at runtime. Instead, embed the
+    exact reference assemblies this app is compiled against (BCL reference pack,
+    UndertaleModLib, Underanalyzer, Magick.NET, ...) as resources; ScriptCompiler loads
+    them from there to compile user scripts.
+  -->
+  <Target Name="EmbedScriptReferenceAssemblies" AfterTargets="ResolveAssemblyReferences" BeforeTargets="CoreCompile">
+    <ItemGroup>
+      <_ScriptRef Include="@(ReferencePath)" Condition="'%(Filename)' != 'Mono.Android' and '%(Filename)' != 'Java.Interop' and '%(Filename)' != 'Mono.Android.Export' and !$([System.String]::Copy('%(Filename)').StartsWith('Microsoft.CodeAnalysis'))" />
+      <EmbeddedResource Include="@(_ScriptRef)" LogicalName="refs/%(Filename)%(Extension)" WithCulture="false" Type="Non-Resx" />
+    </ItemGroup>
+  </Target>
+
+</Project>
