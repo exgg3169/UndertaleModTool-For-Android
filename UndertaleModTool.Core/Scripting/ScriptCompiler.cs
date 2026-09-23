@@ -7,7 +7,7 @@ using Microsoft.CodeAnalysis.Emit;
 using Microsoft.CodeAnalysis.Text;
 using UndertaleModLib.Scripting;
 
-namespace UndertaleModTool.Android.Services;
+namespace UndertaleModTool.Core.Scripting;
 
 /// <summary>
 /// Thrown when a script fails to compile.
@@ -53,6 +53,16 @@ public static class ScriptCompiler
         "System.Text.RegularExpressions",
     };
 
+    /// <summary>
+    /// Assembly whose "refs/*.dll" manifest resources are the reference assemblies for scripts.
+    /// The Android app embeds them into itself at build time (see its .csproj). If null, all loaded
+    /// assemblies are searched.
+    /// </summary>
+    public static Assembly ReferenceAssemblySource { get; set; }
+
+    /// <summary>Base directory for relative <c>#load</c> paths of scripts that have no file path.</summary>
+    public static string DefaultBaseDirectory { get; set; } = Environment.CurrentDirectory;
+
     private static ImmutableArray<MetadataReference> _references;
     private static readonly object ReferencesLock = new();
     private static int _submissionCounter;
@@ -67,15 +77,24 @@ public static class ScriptCompiler
             if (!_references.IsDefault)
                 return _references;
 
-            Assembly self = typeof(ScriptCompiler).Assembly;
             var builder = ImmutableArray.CreateBuilder<MetadataReference>();
-            foreach (string name in self.GetManifestResourceNames())
+            IEnumerable<Assembly> sources = ReferenceAssemblySource is not null
+                ? new[] { ReferenceAssemblySource }
+                : AppDomain.CurrentDomain.GetAssemblies().Where(a => !a.IsDynamic);
+            foreach (Assembly source in sources)
             {
-                if (!name.StartsWith("refs/", StringComparison.Ordinal) || !name.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
-                    continue;
-                using Stream stream = self.GetManifestResourceStream(name)!;
-                builder.Add(MetadataReference.CreateFromStream(stream, filePath: name));
+                foreach (string name in source.GetManifestResourceNames())
+                {
+                    if (!name.StartsWith("refs/", StringComparison.Ordinal) || !name.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
+                        continue;
+                    using Stream stream = source.GetManifestResourceStream(name)!;
+                    builder.Add(MetadataReference.CreateFromStream(stream, filePath: name));
+                }
+                if (builder.Count > 0)
+                    break;
             }
+            if (builder.Count == 0)
+                throw new InvalidOperationException("No embedded script reference assemblies (refs/*.dll) were found.");
             _references = builder.ToImmutable();
             return _references;
         }
@@ -131,7 +150,7 @@ public static class ScriptCompiler
     {
         scriptPath ??= "";
         string baseDirectory = string.IsNullOrEmpty(scriptPath)
-            ? StorageHelper.WorkDirectory
+            ? DefaultBaseDirectory
             : Path.GetDirectoryName(scriptPath);
 
         CSharpParseOptions parseOptions = new(LanguageVersion.Latest, DocumentationMode.None, SourceCodeKind.Script);

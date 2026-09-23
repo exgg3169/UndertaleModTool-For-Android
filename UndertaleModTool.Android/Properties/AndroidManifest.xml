@@ -6,5 +6,20 @@
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="29" />
     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
 
-    <application android:allowBackup="true" android:supportsRtl="true" android:requestLegacyExternalStorage="true" />
+    <!-- The MCP server for AI assistants (a local HTTP server, running as a foreground service). -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <application android:allowBackup="true" android:supportsRtl="true" android:requestLegacyExternalStorage="true"
+                 android:usesCleartextTraffic="true">
+        <service android:name="com.underminers.undertalemodtool.McpService"
+                 android:exported="false"
+                 android:foregroundServiceType="specialUse">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                      android:value="Local Model Context Protocol server that lets AI assistants on this device or network edit the loaded game file" />
+        </service>
+    </application>
 </manifest>

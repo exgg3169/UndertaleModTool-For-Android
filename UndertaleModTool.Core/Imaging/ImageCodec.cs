@@ -3,7 +3,7 @@ using System.IO.Compression;
 using UndertaleModLib.Models;
 using UndertaleModLib.Util;
 
-namespace UndertaleModTool.Android.Services;
+namespace UndertaleModTool.Core.Imaging;
 
 /// <summary>
 /// A decoded image: non-premultiplied 0xAARRGGBB pixels, row-major.
@@ -40,6 +40,31 @@ public sealed class ArgbImage
         return result;
     }
 
+    /// <summary>Returns a copy of a rectangular region (clipped to the image; outside is transparent).</summary>
+    public ArgbImage Crop(int x, int y, int width, int height)
+    {
+        ArgbImage result = new(width, height);
+        for (int row = 0; row < height; row++)
+        {
+            int sy = y + row;
+            if (sy < 0 || sy >= Height)
+                continue;
+            int x0 = Math.Max(0, x), x1 = Math.Min(Width, x + width);
+            if (x1 > x0)
+                Array.Copy(Pixels, sy * Width + x0, result.Pixels, row * width + (x0 - x), x1 - x0);
+        }
+        return result;
+    }
+
+    /// <summary>Encodes this image as PNG.</summary>
+    public byte[] ToPng() => ImageCodec.EncodePng(this);
+
+    /// <summary>Saves this image as a PNG file.</summary>
+    public void SavePng(string path) => File.WriteAllBytes(path, ImageCodec.EncodePng(this));
+
+    /// <summary>Loads a PNG file.</summary>
+    public static ArgbImage LoadPng(string path) => PngDecoder.Decode(path);
+
     /// <summary>Copies <paramref name="image"/> over this image at (x, y), replacing pixels (no blending).</summary>
     public void Paste(ArgbImage image, int x, int y)
     {
@@ -53,6 +78,33 @@ public sealed class ArgbImage
                 return;
             Array.Copy(image.Pixels, row * image.Width + (x0 - x), Pixels, ty * Width + x0, x1 - x0);
         }
+    }
+}
+
+/// <summary>
+/// Caches decoded texture pages, for exporting many items from the same pages.
+/// </summary>
+public sealed class TexturePageCache
+{
+    private readonly Dictionary<UndertaleEmbeddedTexture, ArgbImage> _pages = new();
+
+    public ArgbImage Get(UndertaleEmbeddedTexture texture)
+    {
+        lock (_pages)
+        {
+            if (_pages.TryGetValue(texture, out ArgbImage page))
+                return page;
+        }
+        ArgbImage decoded = ImageCodec.DecodePage(texture);
+        lock (_pages)
+            _pages[texture] = decoded;
+        return decoded;
+    }
+
+    public void Clear()
+    {
+        lock (_pages)
+            _pages.Clear();
     }
 }
 
@@ -108,25 +160,71 @@ public static class ImageCodec
     }
 
     /// <summary>
-    /// Decodes a texture page from any format that doesn't need platform decoders
-    /// (raw, QOI, BZ2+QOI). Returns null for PNG/DDS.
+    /// Decodes a texture page image in any format GameMaker uses (PNG, QOI, BZ2+QOI, raw, DDS)
+    /// without ImageMagick. Returns null for unknown formats.
     /// </summary>
     public static ArgbImage TryDecodeManaged(GMImage image)
     {
-        if (image.Format is not (GMImage.ImageFormat.RawBgra or GMImage.ImageFormat.Qoi or GMImage.ImageFormat.Bz2Qoi))
-            return null;
-        GMImage raw = image.ConvertToRawBgra();
-        return FromBgra(raw.GetRawImageData(), raw.Width, raw.Height);
+        switch (image?.Format)
+        {
+            case GMImage.ImageFormat.Png:
+                return PngDecoder.Decode(image.ToSpan());
+            case GMImage.ImageFormat.Dds:
+                return DdsDecoder.Decode(image.ToSpan());
+            case GMImage.ImageFormat.RawBgra:
+            case GMImage.ImageFormat.Qoi:
+            case GMImage.ImageFormat.Bz2Qoi:
+                GMImage raw = image.ConvertToRawBgra();
+                return FromBgra(raw.GetRawImageData(), raw.Width, raw.Height);
+            default:
+                return null;
+        }
     }
+
+    /// <summary>Decodes an embedded texture page; throws if it can't be decoded.</summary>
+    public static ArgbImage DecodePage(UndertaleEmbeddedTexture texture)
+    {
+        GMImage image = texture?.TextureData?.Image ?? throw new InvalidOperationException("Texture has no image data.");
+        return TryDecodeManaged(image) ?? throw new NotSupportedException($"Can't decode texture format {image.Format}.");
+    }
+
+    /// <summary>
+    /// Returns the image of a texture page item. With <paramref name="includePadding"/>, the result has
+    /// the item's bounding size with the image placed at its target offset (like TextureWorker's padded
+    /// export); otherwise just the target-sized image.
+    /// </summary>
+    public static ArgbImage GetPageItemImage(UndertaleTexturePageItem item, bool includePadding = true, TexturePageCache cache = null)
+    {
+        if (item?.TexturePage is null)
+            throw new InvalidOperationException("Texture page item has no texture page.");
+        ArgbImage page = cache is not null ? cache.Get(item.TexturePage) : DecodePage(item.TexturePage);
+        ArgbImage source = page.Crop(item.SourceX, item.SourceY, Math.Max(1, (int)item.SourceWidth), Math.Max(1, (int)item.SourceHeight));
+        int targetW = Math.Max(1, (int)item.TargetWidth), targetH = Math.Max(1, (int)item.TargetHeight);
+        ArgbImage target = source.Resize(targetW, targetH);
+        if (!includePadding)
+            return target;
+        int w = Math.Max(Math.Max(1, (int)item.BoundingWidth), item.TargetX + targetW);
+        int h = Math.Max(Math.Max(1, (int)item.BoundingHeight), item.TargetY + targetH);
+        ArgbImage padded = new(w, h);
+        padded.Paste(target, item.TargetX, item.TargetY);
+        return padded;
+    }
+
+    /// <summary>Exports a texture page item as PNG (replacement for TextureWorker.ExportAsPNG).</summary>
+    public static void ExportPageItemPng(UndertaleTexturePageItem item, string path, bool includePadding = true, TexturePageCache cache = null)
+        => GetPageItemImage(item, includePadding, cache).SavePng(path);
 
     /// <summary>
     /// Replaces the part of the texture page used by <paramref name="item"/> with <paramref name="image"/>,
     /// resized to the item's source size, keeping the page's image format.
     /// This mirrors <see cref="UndertaleTexturePageItem.ReplaceTexture"/> in UndertaleModLib.
     /// </summary>
-    /// <param name="decodePage">Decodes the item's full texture page.</param>
-    public static void ReplacePageItem(UndertaleTexturePageItem item, ArgbImage image, Func<UndertaleEmbeddedTexture, ArgbImage> decodePage)
+    /// <param name="item">The texture page item to replace.</param>
+    /// <param name="image">The new image.</param>
+    /// <param name="decodePage">Decodes the item's full texture page; defaults to <see cref="DecodePage"/>.</param>
+    public static void ReplacePageItem(UndertaleTexturePageItem item, ArgbImage image, Func<UndertaleEmbeddedTexture, ArgbImage> decodePage = null)
     {
+        decodePage ??= DecodePage;
         if (item?.TexturePage is null)
             throw new InvalidOperationException("This texture page item has no texture page.");
         if (item.SourceWidth == 0 || item.SourceHeight == 0)

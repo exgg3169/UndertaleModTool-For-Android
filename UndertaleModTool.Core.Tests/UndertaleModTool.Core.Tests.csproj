@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Tests for UndertaleModTool.Core, run on desktop .NET (CI: dotnet run -project UndertaleModTool.Core.Tests):
+    image codecs (checked against ImageMagick, which works on desktop), texture packing/import,
+    and the MCP server end to end over HTTP, including running scripts.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\UndertaleModTool.Core\UndertaleModTool.Core.csproj" />
+  </ItemGroup>
+
+  <!-- Same as the Android app: scripts compile against embedded reference assemblies. -->
+  <Target Name="EmbedScriptReferenceAssemblies" AfterTargets="ResolveAssemblyReferences" BeforeTargets="CoreCompile">
+    <ItemGroup>
+      <_ScriptRef Include="@(ReferencePath)" Condition="!$([System.String]::Copy('%(Filename)').StartsWith('Microsoft.CodeAnalysis'))" />
+      <EmbeddedResource Include="@(_ScriptRef)" LogicalName="refs/%(Filename)%(Extension)" WithCulture="false" Type="Non-Resx" />
+    </ItemGroup>
+  </Target>
+
+</Project>

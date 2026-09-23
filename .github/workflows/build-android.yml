@@ -31,6 +31,9 @@ jobs:
       - name: Build CLI (sanity check for UndertaleModLib)
         run: dotnet build UndertaleModCli -c Release
 
+      - name: Test UndertaleModTool.Core (image codecs, MCP server, scripts)
+        run: dotnet run --project UndertaleModTool.Core.Tests -c Release
+
       - name: Build APK
         run: dotnet publish UndertaleModTool.Android -c Release -p:AndroidSdkDirectory=$ANDROID_SDK_ROOT
 
