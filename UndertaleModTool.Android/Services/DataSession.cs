@@ -93,9 +93,57 @@ public static class DataSession
         using (FileStream output = File.Create(localPath))
             input.CopyTo(output);
 
+        // APK / ZIP-style containers (e.g. .wad or .apk): extract the GameMaker data file from inside.
+        global::Android.Net.Uri sourceUri = uri;
+        string extracted = ExtractFromArchive(localPath, localDir, onMessage);
+        if (extracted is not null)
+        {
+            localPath = extracted;
+            displayName = Path.GetFileName(extracted);
+            sourceUri = null; // "Save" would overwrite the archive with a raw data file; use "Save as" instead
+        }
+
         UndertaleData data = LoadFromFile(localPath, onMessage);
-        SetData(data, localPath, uri, displayName);
+        SetData(data, localPath, sourceUri, displayName);
         return data;
+    }
+
+    private static readonly string[] DataEntryNames = { "game.droid", "data.win", "game.unx", "game.ios" };
+
+    /// <summary>
+    /// If <paramref name="path"/> is a ZIP archive, extracts the contained data file and returns its path;
+    /// returns null if the file is not an archive.
+    /// </summary>
+    private static string ExtractFromArchive(string path, string outDir, Action<string> onMessage)
+    {
+        byte[] magic = new byte[4];
+        using (FileStream fs = File.OpenRead(path))
+            if (fs.Read(magic, 0, 4) < 4 || magic[0] != (byte)'P' || magic[1] != (byte)'K')
+                return null;
+
+        string outPath;
+        using (var zip = System.IO.Compression.ZipFile.OpenRead(path))
+        {
+            System.IO.Compression.ZipArchiveEntry entry = null;
+            foreach (string name in DataEntryNames)
+            {
+                entry = zip.Entries.FirstOrDefault(e => e.FullName == "assets/" + name)
+                        ?? zip.Entries.FirstOrDefault(e => e.FullName == name)
+                        ?? zip.Entries.FirstOrDefault(e => e.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+                if (entry is not null)
+                    break;
+            }
+            if (entry is null)
+                throw new IOException("The archive does not contain a data file (game.droid, data.win, game.unx or game.ios).");
+
+            onMessage?.Invoke($"Extracting {entry.FullName}...");
+            outPath = Path.Combine(outDir, entry.Name);
+            using Stream input = entry.Open();
+            using FileStream output = File.Create(outPath);
+            input.CopyTo(output);
+        }
+        File.Delete(path);
+        return outPath;
     }
 
     /// <summary>
